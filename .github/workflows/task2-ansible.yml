@@ -1,0 +1,30 @@
+name: Task 2 - Ansible CI/CD
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_ip:
+        description: 'IP of the target VM (Parametrized Node)'
+        required: true
+
+jobs:
+  ansible:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ github.event.inputs.target_ip }} >> ~/.ssh/known_hosts
+
+      - name: Run Ansible Check (Dry-run)
+        run: |
+          ansible-playbook -i "${{ github.event.inputs.target_ip }}," -u adminuser task2/playbook.yml --check
+        # Якщо перевірка падає, виконання зупиняється.
+
+      - name: Run Ansible Deploy
+        run: |
+          ansible-playbook -i "${{ github.event.inputs.target_ip }}," -u adminuser task2/playbook.yml

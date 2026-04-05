@@ -1,0 +1,73 @@
+---
+- name: Install Minikube, Kubernetes, Helm
+  hosts: all
+  become: yes
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+      check_mode: false
+
+    - name: Install required dependencies
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - software-properties-common
+          - docker.io
+          - socat # Для прокидання проксі
+        state: present
+    
+    - name: Ensure docker group exists
+      group:
+        name: docker
+        state: present
+      check_mode: false
+
+    - name: Add user to docker group
+      user:
+        name: adminuser
+        groups: docker
+        append: yes
+      check_mode: false
+
+    - name: Reset SSH connection to apply new group permissions
+      meta: reset_connection
+
+    - name: Download Minikube
+      get_url:
+        url: https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
+        dest: /usr/local/bin/minikube
+        mode: '0755'
+
+    - name: Download kubectl
+      get_url:
+        url: "https://dl.k8s.io/release/v1.30.0/bin/linux/amd64/kubectl"
+        dest: /usr/local/bin/kubectl
+        mode: '0755'
+
+    - name: Download & Install Helm
+      unarchive:
+        src: https://get.helm.sh/helm-v3.15.0-linux-amd64.tar.gz
+        dest: /tmp
+        remote_src: yes
+      
+    - name: Move Helm binary
+      command: mv /tmp/linux-amd64/helm /usr/local/bin/helm
+      args:
+        creates: /usr/local/bin/helm
+
+    - name: Start Minikube
+      become_user: adminuser
+      command: minikube start --driver=docker
+      register: minikube_status
+      changed_when: "'Done! kubectl is now configured' in minikube_status.stdout"
+
+    - name: Setup Minikube Proxy script
+      copy:
+        dest: /usr/local/bin/start-minikube-proxy.sh
+        content: |
+          #!/bin/bash
+          kubectl proxy --address='0.0.0.0' --disable-filter=true &
+        mode: '0755'
