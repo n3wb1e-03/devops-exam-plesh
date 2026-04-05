@@ -1,0 +1,88 @@
+name: Task 3 - App Deploy CI/CD
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_ip:
+        description: 'IP of the Minikube VM'
+        required: true
+      environment:
+        description: 'Environment to deploy (dev / release)'
+        required: true
+        type: choice
+        options:
+          - dev
+          - release
+      rollback:
+        description: 'Rollback to previous version?'
+        type: boolean
+        default: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/devops-exam-app
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      # 1. Завантажуємо ВАШ репозиторій (тут лежить папка task3 з маніфестами)
+      - name: Checkout your repository
+        uses: actions/checkout@v3
+
+      # 2. Завантажуємо код додатку в окрему папку "app-source"
+      - name: Checkout app code
+        uses: actions/checkout@v3
+        with:
+          repository: YulianSalo/devops-exam-pt2
+          ref: ${{ github.event.inputs.environment == 'dev' && 'develop' || '1.0.0' }}
+          path: app-source # <--- Важливо! Код додатку буде тут
+          
+      - name: Log in to the Container registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        if: github.event.inputs.rollback == 'false'
+        uses: docker/build-push-action@v4
+        with:
+          context: ./app-source # <--- Вказуємо Docker шукати Dockerfile у папці додатку
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.inputs.environment == 'dev' && 'dev' || '1.0.0' }}
+
+      - name: Configure SSH to VM
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ github.event.inputs.target_ip }} >> ~/.ssh/known_hosts
+
+      - name: Copy K8s Manifest & Dry-Run validation
+        run: |
+          # Вказуємо шлях до маніфесту у ВАШІЙ папці task3
+          MANIFEST_FILE="task3/${{ github.event.inputs.environment }}-manifest.yaml"
+          
+          # Копіюємо на сервер
+          scp $MANIFEST_FILE adminuser@${{ github.event.inputs.target_ip }}:~/manifest.yaml
+          
+          # Перевіряємо (Dry Run)
+          ssh adminuser@${{ github.event.inputs.target_ip }} "kubectl apply -f ~/manifest.yaml --dry-run=client"
+
+      - name: Apply Deployment
+        if: github.event.inputs.rollback == 'false'
+        run: |
+          ssh adminuser@${{ github.event.inputs.target_ip }} "kubectl apply -f ~/manifest.yaml"
+
+      - name: Rollback (Extra Points)
+        if: github.event.inputs.rollback == 'true'
+        run: |
+          NAMESPACE=${{ github.event.inputs.environment }}
+          ssh adminuser@${{ github.event.inputs.target_ip }} "kubectl rollout undo deployment/app-deployment -n $NAMESPACE"
